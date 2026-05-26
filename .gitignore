@@ -1,0 +1,30 @@
+# Python/runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# migration-ui local runtime state
+migration-ui/state/
+
+# Linux/kernel build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.order
+*.symvers
+*.tmp
+*.a
+*.so
+
+# Local/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Temporary archives/bundles
+*.tar
+*.tar.gz
+*.zip

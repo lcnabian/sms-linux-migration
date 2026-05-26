@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dattobd 块迁移控制台</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>dattobd 块迁移控制台</h1>
+        <p>源端快照、socket 全量传输、多轮增量同步与状态监控</p>
+      </div>
+      <div class="status-pill" id="jobStatus">未创建任务</div>
+    </header>
+
+    <section class="grid">
+      <form class="panel" id="configForm">
+        <div class="panel-head">
+          <h2>源端</h2>
+          <button type="button" class="ghost" id="probeSource">探测</button>
+        </div>
+        <label>IP / Host<input name="source.host" value="192.168.0.91" required></label>
+        <label>SSH 用户<input name="source.user" value="root" required></label>
+        <label>SSH 端口<input name="source.port" value="22" type="number" required></label>
+        <label>源分区 / 块设备<input name="source.device" value="/dev/vda1" required></label>
+        <label>私钥<textarea name="source.key" placeholder="可留空使用本机 ssh 默认密钥"></textarea></label>
+
+        <div class="panel-head target-head">
+          <h2>目标端</h2>
+          <button type="button" class="ghost" id="probeTarget">探测</button>
+        </div>
+        <label>IP / Host<input name="target.host" value="192.168.0.91" required></label>
+        <label>SSH 用户<input name="target.user" value="root" required></label>
+        <label>SSH 端口<input name="target.port" value="22" type="number" required></label>
+        <label>目标分区 / 块设备<input name="target.device" value="/dev/vdb1" required></label>
+        <label>私钥<textarea name="target.key" placeholder="可留空使用本机 ssh 默认密钥"></textarea></label>
+
+        <div class="row">
+          <label>socket 端口<input name="socketPort" value="19090" type="number"></label>
+          <label>minor<input name="minor" value="0" type="number"></label>
+        </div>
+        <button class="primary" type="submit">创建并推送产物</button>
+        <button class="secondary" type="button" id="adoptRemote">接管远端运行中任务</button>
+      </form>
+
+      <section class="panel console-panel">
+        <div class="panel-head">
+          <h2>任务控制</h2>
+          <span id="jobId">无任务</span>
+        </div>
+        <div class="actions">
+          <button id="startFull" disabled>开始全量</button>
+          <button id="startInc" disabled>同步增量</button>
+          <button id="refreshRemote" disabled>刷新远端</button>
+          <button id="cleanup" disabled>完成并清理</button>
+        </div>
+
+        <div class="metrics">
+          <div><span>阶段</span><strong id="phase">-</strong></div>
+          <div><span>速度</span><strong id="speed">-</strong></div>
+          <div><span>已传输</span><strong id="bytesDone">-</strong></div>
+          <div><span>增量块</span><strong id="changedBlocks">-</strong></div>
+          <div><span>增量范围</span><strong id="rangeCount">-</strong></div>
+          <div><span>上次传输</span><strong id="lastTransfer">-</strong></div>
+          <div><span>日志条数</span><strong id="logCount">-</strong></div>
+        </div>
+
+        <h3>增量列表预览</h3>
+        <pre class="ranges" id="ranges">等待增量同步...</pre>
+
+        <h3>日志</h3>
+        <pre class="logs" id="logs">等待任务...</pre>
+      </section>
+    </section>
+
+    <section class="panel history">
+      <div class="panel-head">
+        <h2>历史任务</h2>
+        <button type="button" class="ghost" id="reloadJobs">刷新列表</button>
+      </div>
+      <div id="jobList" class="job-list">暂无历史任务</div>
+    </section>
+
+    <section class="panel probe">
+      <h2>探测输出</h2>
+      <pre id="probeOutput">点击源端或目标端探测按钮查看远端磁盘与系统信息。</pre>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

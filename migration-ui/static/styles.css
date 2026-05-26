@@ -1,0 +1,247 @@
+:root {
+  color-scheme: light;
+  --bg: #eef2f5;
+  --panel: #ffffff;
+  --ink: #18212b;
+  --muted: #687384;
+  --line: #d9e0e7;
+  --accent: #0f766e;
+  --accent-2: #2563eb;
+  --danger: #b42318;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.shell {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: 28px; line-height: 1.2; }
+h2 { font-size: 18px; }
+h3 { font-size: 14px; margin-top: 18px; margin-bottom: 8px; }
+p { color: var(--muted); margin-top: 6px; }
+
+.status-pill {
+  min-width: 150px;
+  text-align: center;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 460px) 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.target-head { margin-top: 22px; }
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+input, textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 11px;
+  font: inherit;
+  color: var(--ink);
+  background: #fbfcfd;
+}
+
+textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 13px;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--accent-2);
+  color: white;
+}
+
+button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.primary {
+  width: 100%;
+  background: var(--accent);
+  margin-top: 4px;
+}
+
+.secondary {
+  width: 100%;
+  background: #7c3aed;
+  margin-top: 10px;
+}
+
+.ghost {
+  border: 1px solid var(--line);
+  background: #f7fafc;
+  color: var(--ink);
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.actions button:nth-child(2) { background: var(--accent); }
+.actions button:nth-child(3) { background: #7c3aed; }
+.actions button:nth-child(4) { background: #475569; }
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.metrics div {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  background: #fbfcfd;
+  min-height: 72px;
+}
+
+.metrics span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.metrics strong {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0f172a;
+  color: #d9f99d;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.ranges {
+  min-height: 150px;
+  max-height: 220px;
+}
+
+.logs {
+  min-height: 280px;
+  max-height: 420px;
+  color: #c7d2fe;
+}
+
+.probe {
+  margin-top: 18px;
+}
+
+.history {
+  margin-top: 18px;
+}
+
+.job-list {
+  display: grid;
+  gap: 8px;
+}
+
+.job-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fbfcfd;
+}
+
+.job-item strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.job-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#probeOutput {
+  min-height: 160px;
+  max-height: 360px;
+  color: #e5e7eb;
+}
+
+@media (max-width: 980px) {
+  .grid { grid-template-columns: 1fr; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 620px) {
+  .shell { padding: 14px; }
+  .topbar { flex-direction: column; }
+  .metrics, .row { grid-template-columns: 1fr; }
+}

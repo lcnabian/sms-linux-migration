@@ -1,0 +1,24 @@
+# Binaries
+app/dbdctl
+utils/update-img
+
+# Dynamically generated files
+src/kernel-config.h
+modules.order
+*.mod
+*.mod.c
+Module.symvers
+*.cmd
+.tmp_versions/
+*.o.ur-safe
+
+# Leftover files
+*~
+dmesg.log
+__pycache__/
+.cache/
+
+# Project directories
+pkgbuild/
+
+*kdev4*
