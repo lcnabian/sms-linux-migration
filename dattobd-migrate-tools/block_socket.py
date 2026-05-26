@@ -17,12 +17,23 @@ import struct
 import sys
 import threading
 import time
+import zlib
 
 
 MAGIC = "DBD_SOCKET_V1"
 DEFAULT_CHUNK = 4 * 1024 * 1024
 DEFAULT_ACK_EVERY_CHUNKS = 32
 BLKGETSIZE64 = 0x80081272
+COMPRESSION_NONE = "none"
+COMPRESSION_ZLIB = "zlib"
+COMPRESSION_AUTO = "auto"
+COMPRESSION_CHOICES = (COMPRESSION_NONE, COMPRESSION_ZLIB, COMPRESSION_AUTO)
+
+
+def supported_compressions(decompression):
+    if decompression == "none":
+        return [COMPRESSION_NONE]
+    return [COMPRESSION_NONE, COMPRESSION_ZLIB]
 
 
 def read_exact(sock, size):
@@ -105,6 +116,33 @@ def connect(host, port, retry_seconds):
     raise last_error
 
 
+def build_chunk_payload(data, compression, compression_level):
+    if compression == COMPRESSION_NONE:
+        return data, COMPRESSION_NONE
+
+    compressed = zlib.compress(data, compression_level)
+    if compression == COMPRESSION_AUTO and len(compressed) >= len(data):
+        return data, COMPRESSION_NONE
+    return compressed, COMPRESSION_ZLIB
+
+
+def decode_chunk_payload(payload, compression, expected_length):
+    if compression == COMPRESSION_NONE:
+        data = payload
+    elif compression == COMPRESSION_ZLIB:
+        data = zlib.decompress(payload)
+    else:
+        raise ValueError("unsupported compression: {}".format(compression))
+
+    if len(data) != expected_length:
+        raise ValueError(
+            "decompressed length mismatch: got {}, expected {}".format(
+                len(data), expected_length
+            )
+        )
+    return data
+
+
 class AckState:
     def __init__(self):
         self.lock = threading.Lock()
@@ -172,6 +210,7 @@ def ack_reader(sock, state):
 
 def send_ranges(args, ranges):
     total_bytes = 0
+    total_wire_bytes = 0
     total_chunks = 0
     started = time.time()
     last_report = started
@@ -188,10 +227,19 @@ def send_ranges(args, ranges):
             "source_size": src_size,
             "truncate": args.truncate,
             "ack_every_chunks": args.ack_every_chunks,
+            "compression": args.compression,
+            "compression_level": args.compression_level,
         })
         ack = recv_json(sock)
         if ack.get("status") != "ok":
             raise RuntimeError("receiver rejected session: {}".format(ack))
+        if args.compression != COMPRESSION_NONE:
+            receiver_compressions = ack.get("compression") or []
+            if COMPRESSION_ZLIB not in receiver_compressions:
+                raise RuntimeError(
+                    "receiver does not advertise zlib decompression; "
+                    "start the receiver with --decompression auto"
+                )
 
         ack_state = AckState()
         reader = threading.Thread(target=ack_reader, args=(sock, ack_state), daemon=True)
@@ -208,21 +256,31 @@ def send_ranges(args, ranges):
                     if len(data) != to_read:
                         raise IOError("short read at offset {}".format(cursor))
                     digest = hashlib.sha256(data).hexdigest()
+                    payload, payload_compression = build_chunk_payload(
+                        data, args.compression, args.compression_level
+                    )
                     send_json(sock, {
                         "type": "chunk",
                         "offset": cursor,
                         "length": len(data),
+                        "wire_length": len(payload),
+                        "compression": payload_compression,
                         "sha256": digest,
                     })
-                    sock.sendall(data)
+                    sock.sendall(payload)
                     total_bytes += len(data)
+                    total_wire_bytes += len(payload)
                     total_chunks += 1
                     now_ts = time.time()
                     if now_ts - last_report >= args.progress_interval:
                         interval = max(now_ts - last_report, 0.001)
                         speed = int((total_bytes - last_bytes) / interval)
-                        print("progress chunks={} bytes={} speed_bps={}".format(
-                            total_chunks, total_bytes, speed), flush=True)
+                        print(
+                            "progress chunks={} bytes={} wire_bytes={} speed_bps={}".format(
+                                total_chunks, total_bytes, total_wire_bytes, speed
+                            ),
+                            flush=True,
+                        )
                         last_report = now_ts
                         last_bytes = total_bytes
                     cursor += len(data)
@@ -232,6 +290,7 @@ def send_ranges(args, ranges):
             "type": "done",
             "chunks": total_chunks,
             "bytes": total_bytes,
+            "wire_bytes": total_wire_bytes,
         })
         ack_state.mark_done_requested()
         ack = ack_state.wait_final(timeout=300)
@@ -239,7 +298,9 @@ def send_ranges(args, ranges):
         if ack.get("status") != "ok":
             raise RuntimeError("receiver final error: {}".format(ack))
 
-    print("sent chunks={} bytes={}".format(total_chunks, total_bytes))
+    print("sent chunks={} bytes={} wire_bytes={}".format(
+        total_chunks, total_bytes, total_wire_bytes
+    ))
 
 
 def receive_once(args):
@@ -257,6 +318,16 @@ def receive_once(args):
                 send_json(conn, {"status": "error", "error": "bad magic"})
                 return 2
 
+            receiver_compressions = supported_compressions(args.decompression)
+            requested_compression = hello.get("compression", COMPRESSION_NONE)
+            if requested_compression != COMPRESSION_NONE and COMPRESSION_ZLIB not in receiver_compressions:
+                send_json(conn, {
+                    "status": "error",
+                    "error": "receiver decompression disabled",
+                    "compression": receiver_compressions,
+                })
+                return 2
+
             flags = os.O_CREAT | os.O_RDWR
             if args.direct:
                 flags |= getattr(os, "O_DIRECT", 0)
@@ -265,12 +336,17 @@ def receive_once(args):
                 if hello.get("truncate"):
                     os.ftruncate(fd, int(hello["source_size"]))
 
-                send_json(conn, {"status": "ok"})
+                send_json(conn, {
+                    "status": "ok",
+                    "compression": receiver_compressions,
+                    "decompression": args.decompression,
+                })
                 ack_every_chunks = int(hello.get("ack_every_chunks") or 1)
                 if ack_every_chunks <= 0:
                     ack_every_chunks = 1
                 chunks = 0
                 total = 0
+                total_wire = 0
 
                 while True:
                     msg = recv_json(conn)
@@ -281,8 +357,14 @@ def receive_once(args):
                             "type": "done",
                             "chunks": chunks,
                             "bytes": total,
+                            "wire_bytes": total_wire,
                         })
-                        print("received chunks={} bytes={}".format(chunks, total), flush=True)
+                        print(
+                            "received chunks={} bytes={} wire_bytes={}".format(
+                                chunks, total, total_wire
+                            ),
+                            flush=True,
+                        )
                         return 0
 
                     if msg_type != "chunk":
@@ -291,7 +373,30 @@ def receive_once(args):
 
                     offset = int(msg["offset"])
                     length = int(msg["length"])
-                    data = read_exact(conn, length)
+                    compression = msg.get("compression", COMPRESSION_NONE)
+                    if compression != COMPRESSION_NONE and args.decompression == "none":
+                        send_json(conn, {
+                            "status": "error",
+                            "error": "compressed chunk rejected by receiver",
+                            "chunks": chunks,
+                            "bytes": total,
+                            "wire_bytes": total_wire,
+                        })
+                        return 2
+                    wire_length = int(msg.get("wire_length", length))
+                    payload = read_exact(conn, wire_length)
+                    total_wire += wire_length
+                    try:
+                        data = decode_chunk_payload(payload, compression, length)
+                    except Exception as exc:
+                        send_json(conn, {
+                            "status": "error",
+                            "error": str(exc),
+                            "chunks": chunks,
+                            "bytes": total,
+                            "wire_bytes": total_wire,
+                        })
+                        return 2
                     digest = hashlib.sha256(data).hexdigest()
                     if digest != msg["sha256"]:
                         send_json(conn, {
@@ -299,6 +404,7 @@ def receive_once(args):
                             "error": "sha256 mismatch",
                             "chunks": chunks,
                             "bytes": total,
+                            "wire_bytes": total_wire,
                         })
                         return 2
 
@@ -309,6 +415,7 @@ def receive_once(args):
                             "error": "short write",
                             "chunks": chunks,
                             "bytes": total,
+                            "wire_bytes": total_wire,
                         })
                         return 2
                     chunks += 1
@@ -319,6 +426,7 @@ def receive_once(args):
                             "type": "ack",
                             "chunks": chunks,
                             "bytes": total,
+                            "wire_bytes": total_wire,
                         })
             finally:
                 os.fsync(fd)
@@ -335,6 +443,7 @@ def main(argv=None):
     recv.add_argument("--port", type=int, required=True)
     recv.add_argument("--target", required=True)
     recv.add_argument("--direct", action="store_true")
+    recv.add_argument("--decompression", choices=("auto", "none"), default="auto")
 
     full = sub.add_parser("send-full")
     full.add_argument("--host", required=True)
@@ -344,6 +453,8 @@ def main(argv=None):
     full.add_argument("--connect-timeout", type=float, default=10.0)
     full.add_argument("--progress-interval", type=float, default=1.0)
     full.add_argument("--ack-every-chunks", type=int, default=DEFAULT_ACK_EVERY_CHUNKS)
+    full.add_argument("--compression", choices=COMPRESSION_CHOICES, default=COMPRESSION_NONE)
+    full.add_argument("--compression-level", type=int, choices=range(1, 10), default=1)
     full.add_argument("--truncate", action="store_true")
 
     ranges = sub.add_parser("send-ranges")
@@ -355,6 +466,8 @@ def main(argv=None):
     ranges.add_argument("--connect-timeout", type=float, default=10.0)
     ranges.add_argument("--progress-interval", type=float, default=1.0)
     ranges.add_argument("--ack-every-chunks", type=int, default=DEFAULT_ACK_EVERY_CHUNKS)
+    ranges.add_argument("--compression", choices=COMPRESSION_CHOICES, default=COMPRESSION_NONE)
+    ranges.add_argument("--compression-level", type=int, choices=range(1, 10), default=1)
     ranges.add_argument("--truncate", action="store_true")
 
     args = parser.parse_args(argv)

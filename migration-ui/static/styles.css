@@ -81,7 +81,7 @@ label {
   margin-bottom: 12px;
 }
 
-input, textarea {
+input, textarea, select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -100,6 +100,10 @@ textarea {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.transport-row {
+  grid-template-columns: 1.1fr 1.1fr .8fr;
 }
 
 button {
@@ -243,5 +247,5 @@ pre {
 @media (max-width: 620px) {
   .shell { padding: 14px; }
   .topbar { flex-direction: column; }
-  .metrics, .row { grid-template-columns: 1fr; }
+  .metrics, .row, .transport-row { grid-template-columns: 1fr; }
 }

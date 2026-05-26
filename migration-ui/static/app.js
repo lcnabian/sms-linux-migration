@@ -22,7 +22,10 @@ function collectForm() {
       key: String(fd.get("target.key") || "")
     },
     socketPort: Number(get("socketPort") || 19090),
-    minor: Number(get("minor") || 0)
+    minor: Number(get("minor") || 0),
+    compression: get("compression") || "none",
+    decompression: get("decompression") || "auto",
+    compressionLevel: Number(get("compressionLevel") || 1)
   };
 }
 
@@ -40,6 +43,23 @@ function humanBytes(value) {
 
 function humanSpeed(value) {
   return `${humanBytes(value)}/s`;
+}
+
+function compressionLabel(value) {
+  const labels = {
+    none: "不压缩",
+    auto: "自动",
+    zlib: "zlib"
+  };
+  return labels[value] || value || "-";
+}
+
+function decompressionLabel(value) {
+  const labels = {
+    auto: "自动",
+    none: "禁用"
+  };
+  return labels[value] || value || "-";
 }
 
 async function post(url, body = {}) {
@@ -75,17 +95,22 @@ function setButtons(job) {
 }
 
 function render(job) {
+  const metrics = job.metrics || {};
   $("jobStatus").textContent = `${job.status} / ${job.phase}`;
   $("jobId").textContent = job.id;
   $("phase").textContent = job.phase;
-  $("speed").textContent = humanSpeed(job.metrics.speed_bps);
-  $("bytesDone").textContent = humanBytes(job.metrics.bytes_done);
-  $("changedBlocks").textContent = job.metrics.nr_changed_blocks || "-";
-  $("rangeCount").textContent = job.metrics.ranges_count || "-";
-  const lt = job.metrics.last_transfer || {};
-  $("lastTransfer").textContent = lt.type ? `${lt.type} ${humanBytes(lt.bytes)} / ${Number(lt.elapsed || 0).toFixed(1)}s` : "-";
+  $("speed").textContent = humanSpeed(metrics.speed_bps);
+  $("bytesDone").textContent = humanBytes(metrics.bytes_done);
+  $("wireBytesDone").textContent = humanBytes(metrics.wire_bytes_done);
+  $("compressionMode").textContent = `${compressionLabel(job.compression || job.config?.compression)} / 解压${decompressionLabel(job.decompression || job.config?.decompression)}`;
+  $("changedBlocks").textContent = metrics.nr_changed_blocks || "-";
+  $("rangeCount").textContent = metrics.ranges_count || "-";
+  const lt = metrics.last_transfer || {};
+  $("lastTransfer").textContent = lt.type
+    ? `${lt.type} ${humanBytes(lt.bytes)} -> ${humanBytes(lt.wire_bytes || lt.bytes)} / ${compressionLabel(lt.compression || job.compression)} / ${Number(lt.elapsed || 0).toFixed(1)}s`
+    : "-";
   $("logCount").textContent = job.log_count || (job.logs || []).length || "-";
-  $("ranges").textContent = (job.metrics.ranges_preview || []).join("\n") || "等待增量同步...";
+  $("ranges").textContent = (metrics.ranges_preview || []).join("\n") || "等待增量同步...";
   $("logs").textContent = (job.logs || []).join("\n") || "等待任务...";
   $("logs").scrollTop = $("logs").scrollHeight;
   setButtons(job);

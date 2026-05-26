@@ -42,6 +42,22 @@
           <label>socket 端口<input name="socketPort" value="19090" type="number"></label>
           <label>minor<input name="minor" value="0" type="number"></label>
         </div>
+        <div class="row transport-row">
+          <label>传输压缩
+            <select name="compression">
+              <option value="none" selected>不压缩</option>
+              <option value="auto">自动</option>
+              <option value="zlib">zlib</option>
+            </select>
+          </label>
+          <label>目标解压
+            <select name="decompression">
+              <option value="auto" selected>自动</option>
+              <option value="none">禁用</option>
+            </select>
+          </label>
+          <label>压缩级别<input name="compressionLevel" value="1" type="number" min="1" max="9"></label>
+        </div>
         <button class="primary" type="submit">创建并推送产物</button>
         <button class="secondary" type="button" id="adoptRemote">接管远端运行中任务</button>
       </form>
@@ -62,6 +78,8 @@
           <div><span>阶段</span><strong id="phase">-</strong></div>
           <div><span>速度</span><strong id="speed">-</strong></div>
           <div><span>已传输</span><strong id="bytesDone">-</strong></div>
+          <div><span>线上传输</span><strong id="wireBytesDone">-</strong></div>
+          <div><span>压缩</span><strong id="compressionMode">-</strong></div>
           <div><span>增量块</span><strong id="changedBlocks">-</strong></div>
           <div><span>增量范围</span><strong id="rangeCount">-</strong></div>
           <div><span>上次传输</span><strong id="lastTransfer">-</strong></div>

@@ -93,6 +93,54 @@ def q(value):
     return shlex.quote(str(value))
 
 
+def normalize_choice(value, allowed, default):
+    value = str(value or default).strip()
+    return value if value in allowed else default
+
+
+def normalize_int(value, default, min_value, max_value):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(min_value, min(max_value, number))
+
+
+def transport_options(cfg, data=None):
+    data = data or {}
+    compression = normalize_choice(
+        data.get("compression") or cfg.get("compression"),
+        {"none", "zlib", "auto"},
+        "none",
+    )
+    decompression = normalize_choice(
+        data.get("decompression") or cfg.get("decompression"),
+        {"auto", "none"},
+        "auto",
+    )
+    compression_level = normalize_int(
+        data.get("compressionLevel") or cfg.get("compressionLevel"),
+        1,
+        1,
+        9,
+    )
+    return compression, decompression, compression_level
+
+
+def default_metrics():
+    return {
+        "bytes_total": 0,
+        "bytes_done": 0,
+        "wire_bytes_done": 0,
+        "speed_bps": 0,
+        "cow_size_current": 0,
+        "nr_changed_blocks": 0,
+        "ranges_count": 0,
+        "ranges_preview": [],
+        "last_transfer": {},
+    }
+
+
 class Endpoint:
     def __init__(self, cfg, tmpdir):
         self.host = cfg["host"].strip()
@@ -160,17 +208,9 @@ class MigrationJob:
         self.logs = []
         self.events = queue.Queue()
         self.worker = None
-        self.metrics = {
-            "bytes_total": 0,
-            "bytes_done": 0,
-            "speed_bps": 0,
-            "cow_size_current": 0,
-            "nr_changed_blocks": 0,
-            "ranges_count": 0,
-            "ranges_preview": [],
-            "last_transfer": {},
-        }
+        self.metrics = default_metrics()
         self.transfer_base = 0
+        self.transfer_wire_base = 0
         self.tmpdir_obj = tempfile.TemporaryDirectory(prefix="dattobd-ui-")
         self.tmpdir = Path(self.tmpdir_obj.name)
         self.source = Endpoint(cfg["source"], self.tmpdir)
@@ -180,6 +220,10 @@ class MigrationJob:
         self.minor = int(cfg.get("minor") or 0)
         self.port = int(cfg.get("socketPort") or 19090)
         self.remote_dir = cfg.get("remoteDir", "/root/dattobd-ui-work")
+        self.compression, self.decompression, self.compression_level = transport_options(cfg)
+        self.cfg["compression"] = self.compression
+        self.cfg["decompression"] = self.decompression
+        self.cfg["compressionLevel"] = self.compression_level
         self.cow_index = 0
         self.active_cow = f"/.datto-ui-{self.id}-0"
         self.previous_cow = None
@@ -232,6 +276,9 @@ class MigrationJob:
             "minor": self.minor,
             "socketPort": self.port,
             "remoteDir": self.remote_dir,
+            "compression": self.compression,
+            "decompression": self.decompression,
+            "compressionLevel": self.compression_level,
             "active_cow": self.active_cow,
             "previous_cow": self.previous_cow,
             "cow_index": self.cow_index,
@@ -263,7 +310,10 @@ class MigrationJob:
         obj.logs = data.get("logs", [])
         obj.events = queue.Queue()
         obj.worker = None
-        obj.metrics = data.get("metrics", {})
+        obj.metrics = default_metrics()
+        obj.metrics.update(data.get("metrics", {}))
+        obj.transfer_base = 0
+        obj.transfer_wire_base = 0
         obj.tmpdir_obj = tempfile.TemporaryDirectory(prefix="dattobd-ui-")
         obj.tmpdir = Path(obj.tmpdir_obj.name)
         obj.source = Endpoint(obj.cfg["source"], obj.tmpdir)
@@ -273,6 +323,10 @@ class MigrationJob:
         obj.minor = int(data.get("minor") or obj.cfg.get("minor") or 0)
         obj.port = int(data.get("socketPort") or obj.cfg.get("socketPort") or 19090)
         obj.remote_dir = data.get("remoteDir") or obj.cfg.get("remoteDir", "/root/dattobd-ui-work")
+        obj.compression, obj.decompression, obj.compression_level = transport_options(obj.cfg, data)
+        obj.cfg["compression"] = obj.compression
+        obj.cfg["decompression"] = obj.decompression
+        obj.cfg["compressionLevel"] = obj.compression_level
         obj.active_cow = data.get("active_cow") or f"/.datto-ui-{obj.id}-0"
         obj.previous_cow = data.get("previous_cow")
         obj.cow_index = int(data.get("cow_index") or 0)
@@ -314,12 +368,18 @@ class MigrationJob:
 
     def parse_remote_status(self, out):
         receiver_bytes = None
+        receiver_wire_bytes = None
         for line in out.splitlines():
             if "received chunks=" in line and "bytes=" in line:
                 for part in line.split():
                     if part.startswith("bytes="):
                         try:
                             receiver_bytes = int(part.split("=", 1)[1])
+                        except ValueError:
+                            pass
+                    elif part.startswith("wire_bytes="):
+                        try:
+                            receiver_wire_bytes = int(part.split("=", 1)[1])
                         except ValueError:
                             pass
             if '"nr_changed_blocks":' in line:
@@ -339,6 +399,8 @@ class MigrationJob:
                     pass
         if receiver_bytes is not None:
             self.metrics["bytes_done"] = receiver_bytes
+        if receiver_wire_bytes is not None:
+            self.metrics["wire_bytes_done"] = receiver_wire_bytes
 
     def make_bundle(self):
         bundle = self.tmpdir / "dattobd-bundle.tar.gz"
@@ -568,6 +630,7 @@ class MigrationJob:
             f"cd {self.remote_dir}/dattobd-migrate-tools; "
             f"rm -f {log_path} {pid_path}; "
             f"nohup ./block_socket.py receive --host 0.0.0.0 --port {self.port} --target {self.target_dev} "
+            f"--decompression {q(self.decompression)} "
             f"> {log_path} 2>&1 & echo $! > {pid_path}; sleep 0.5; cat {pid_path}"
         )
         out = self.ssh_checked(self.target, cmd, timeout=20)
@@ -593,20 +656,35 @@ class MigrationJob:
         self.log("开始 socket 全量传输")
         start = time.time()
         self.transfer_base = self.metrics["bytes_done"]
+        self.transfer_wire_base = self.metrics.get("wire_bytes_done", 0)
         cmd = (
             f"cd {self.remote_dir}/dattobd-migrate-tools; "
             f"./block_socket.py send-full --host {self.target.host} --port {self.port} "
-            f"--source /dev/datto{self.minor} --progress-interval 1"
+            f"--source /dev/datto{self.minor} --progress-interval 1 "
+            f"--compression {q(self.compression)} --compression-level {self.compression_level}"
         )
         out = self.ssh_stream(self.source, cmd, self.handle_transfer_line)
         elapsed = max(time.time() - start, 0.001)
-        bytes_sent = self.parse_sent_bytes(out)
+        transfer = self.parse_transfer_summary(out)
+        bytes_sent = transfer["bytes"]
+        wire_bytes_sent = transfer["wire_bytes"]
         if bytes_sent <= 0:
             raise RuntimeError("full transfer sent 0 bytes, aborting")
-        self.metrics["last_transfer"] = {"type": "full", "bytes": bytes_sent, "elapsed": elapsed}
+        self.metrics["last_transfer"] = {
+            "type": "full",
+            "bytes": bytes_sent,
+            "wire_bytes": wire_bytes_sent,
+            "elapsed": elapsed,
+            "compression": self.compression,
+        }
         self.metrics["bytes_done"] = self.transfer_base + bytes_sent
+        self.metrics["wire_bytes_done"] = self.transfer_wire_base + wire_bytes_sent
         self.metrics["speed_bps"] = int(bytes_sent / elapsed)
-        self.log(f"全量传输完成 bytes={bytes_sent} elapsed={elapsed:.2f}s avg_speed={self.metrics['speed_bps']} B/s")
+        self.log(
+            f"全量传输完成 bytes={bytes_sent} wire_bytes={wire_bytes_sent} "
+            f"compression={self.compression} elapsed={elapsed:.2f}s "
+            f"avg_speed={self.metrics['speed_bps']} B/s"
+        )
 
     def list_ranges(self):
         self.phase = "list-ranges"
@@ -633,29 +711,64 @@ class MigrationJob:
         self.log("开始 socket 增量传输")
         start = time.time()
         self.transfer_base = self.metrics["bytes_done"]
+        self.transfer_wire_base = self.metrics.get("wire_bytes_done", 0)
         cmd = (
             f"cd {self.remote_dir}/dattobd-migrate-tools; "
             f"./block_socket.py send-ranges --host {self.target.host} --port {self.port} "
-            f"--source /dev/datto{self.minor} --ranges {ranges_path} --progress-interval 1"
+            f"--source /dev/datto{self.minor} --ranges {ranges_path} --progress-interval 1 "
+            f"--compression {q(self.compression)} --compression-level {self.compression_level}"
         )
         out = self.ssh_stream(self.source, cmd, self.handle_transfer_line)
         elapsed = max(time.time() - start, 0.001)
-        bytes_sent = self.parse_sent_bytes(out)
+        transfer = self.parse_transfer_summary(out)
+        bytes_sent = transfer["bytes"]
+        wire_bytes_sent = transfer["wire_bytes"]
         if self.metrics["nr_changed_blocks"] and bytes_sent <= 0:
             raise RuntimeError("incremental transfer sent 0 bytes while changed blocks exist")
-        self.metrics["last_transfer"] = {"type": "incremental", "bytes": bytes_sent, "elapsed": elapsed}
+        self.metrics["last_transfer"] = {
+            "type": "incremental",
+            "bytes": bytes_sent,
+            "wire_bytes": wire_bytes_sent,
+            "elapsed": elapsed,
+            "compression": self.compression,
+        }
         self.metrics["bytes_done"] = self.transfer_base + bytes_sent
+        self.metrics["wire_bytes_done"] = self.transfer_wire_base + wire_bytes_sent
         self.metrics["speed_bps"] = int(bytes_sent / elapsed)
-        self.log(f"增量传输完成 bytes={bytes_sent} elapsed={elapsed:.2f}s avg_speed={self.metrics['speed_bps']} B/s")
+        self.log(
+            f"增量传输完成 bytes={bytes_sent} wire_bytes={wire_bytes_sent} "
+            f"compression={self.compression} elapsed={elapsed:.2f}s "
+            f"avg_speed={self.metrics['speed_bps']} B/s"
+        )
 
-    def parse_sent_bytes(self, out):
+    def parse_transfer_summary(self, out):
+        for line in reversed(out.splitlines()):
+            if not line.startswith("sent "):
+                continue
+            result = {"bytes": 0, "wire_bytes": 0}
+            for token in line.split():
+                if token.startswith("bytes="):
+                    try:
+                        result["bytes"] = int(token.split("=", 1)[1])
+                    except ValueError:
+                        pass
+                elif token.startswith("wire_bytes="):
+                    try:
+                        result["wire_bytes"] = int(token.split("=", 1)[1])
+                    except ValueError:
+                        pass
+            if result["bytes"]:
+                if not result["wire_bytes"]:
+                    result["wire_bytes"] = result["bytes"]
+                return result
         for token in out.replace("\n", " ").split():
             if token.startswith("bytes="):
                 try:
-                    return int(token.split("=", 1)[1])
+                    value = int(token.split("=", 1)[1])
+                    return {"bytes": value, "wire_bytes": value}
                 except ValueError:
                     pass
-        return 0
+        return {"bytes": 0, "wire_bytes": 0}
 
     def handle_transfer_line(self, line):
         self.log(line)
@@ -663,10 +776,13 @@ class MigrationJob:
             for part in line.split():
                 if part.startswith("bytes="):
                     self.metrics["bytes_done"] = self.transfer_base + int(part.split("=", 1)[1])
+                elif part.startswith("wire_bytes="):
+                    self.metrics["wire_bytes_done"] = self.transfer_wire_base + int(part.split("=", 1)[1])
                 elif part.startswith("speed_bps="):
                     self.metrics["speed_bps"] = int(part.split("=", 1)[1])
             self.log(
                 f"传输进度 total={self.metrics['bytes_done']} bytes "
+                f"wire={self.metrics['wire_bytes_done']} bytes "
                 f"speed={self.metrics['speed_bps']} B/s"
             )
 
