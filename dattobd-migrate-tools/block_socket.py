@@ -15,11 +15,13 @@ import os
 import socket
 import struct
 import sys
+import threading
 import time
 
 
 MAGIC = "DBD_SOCKET_V1"
 DEFAULT_CHUNK = 4 * 1024 * 1024
+DEFAULT_ACK_EVERY_CHUNKS = 32
 BLKGETSIZE64 = 0x80081272
 
 
@@ -94,11 +96,78 @@ def connect(host, port, retry_seconds):
     last_error = None
     while time.time() <= deadline:
         try:
-            return socket.create_connection((host, port), timeout=10)
+            sock = socket.create_connection((host, port), timeout=10)
+            sock.settimeout(None)
+            return sock
         except OSError as exc:
             last_error = exc
             time.sleep(0.2)
     raise last_error
+
+
+class AckState:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.done = threading.Event()
+        self.error = None
+        self.final_ack = None
+        self.last_ack = None
+        self.done_requested = False
+
+    def mark_done_requested(self):
+        with self.lock:
+            self.done_requested = True
+
+    def set_ack(self, ack):
+        with self.lock:
+            self.last_ack = ack
+            if ack.get("status") != "ok":
+                self.error = ack.get("error") or "receiver returned an error"
+                self.done.set()
+                return
+
+            ack_type = ack.get("type")
+            if ack_type == "done":
+                self.final_ack = ack
+                self.done.set()
+            elif ack_type is None and "chunks" in ack and "bytes" in ack:
+                # Compatibility with the original receiver final response.
+                self.final_ack = ack
+                self.done.set()
+
+    def set_error(self, exc):
+        with self.lock:
+            if not self.error:
+                self.error = str(exc)
+            self.done.set()
+
+    def raise_if_error(self):
+        with self.lock:
+            if self.error:
+                raise RuntimeError("receiver error: {}".format(self.error))
+
+    def wait_final(self, timeout=None):
+        if not self.done.wait(timeout):
+            raise TimeoutError("timed out waiting for receiver final ack")
+        self.raise_if_error()
+        with self.lock:
+            if not self.final_ack:
+                raise RuntimeError("receiver closed before final ack")
+            return self.final_ack
+
+
+def ack_reader(sock, state):
+    try:
+        while True:
+            ack = recv_json(sock)
+            state.set_ack(ack)
+            if ack.get("status") != "ok" or ack.get("type") == "done":
+                return
+            with state.lock:
+                if state.final_ack:
+                    return
+    except Exception as exc:
+        state.set_error(exc)
 
 
 def send_ranges(args, ranges):
@@ -118,16 +187,22 @@ def send_ranges(args, ranges):
             "source": args.source,
             "source_size": src_size,
             "truncate": args.truncate,
+            "ack_every_chunks": args.ack_every_chunks,
         })
         ack = recv_json(sock)
         if ack.get("status") != "ok":
             raise RuntimeError("receiver rejected session: {}".format(ack))
+
+        ack_state = AckState()
+        reader = threading.Thread(target=ack_reader, args=(sock, ack_state), daemon=True)
+        reader.start()
 
         with open(args.source, "rb", buffering=0) as src:
             for offset, length in ranges:
                 remaining = length
                 cursor = offset
                 while remaining:
+                    ack_state.raise_if_error()
                     to_read = min(args.chunk_size, remaining)
                     data = os.pread(src.fileno(), to_read, cursor)
                     if len(data) != to_read:
@@ -140,9 +215,6 @@ def send_ranges(args, ranges):
                         "sha256": digest,
                     })
                     sock.sendall(data)
-                    ack = recv_json(sock)
-                    if ack.get("status") != "ok":
-                        raise RuntimeError("receiver chunk error: {}".format(ack))
                     total_bytes += len(data)
                     total_chunks += 1
                     now_ts = time.time()
@@ -161,7 +233,9 @@ def send_ranges(args, ranges):
             "chunks": total_chunks,
             "bytes": total_bytes,
         })
-        ack = recv_json(sock)
+        ack_state.mark_done_requested()
+        ack = ack_state.wait_final(timeout=300)
+        reader.join(timeout=1)
         if ack.get("status") != "ok":
             raise RuntimeError("receiver final error: {}".format(ack))
 
@@ -192,6 +266,9 @@ def receive_once(args):
                     os.ftruncate(fd, int(hello["source_size"]))
 
                 send_json(conn, {"status": "ok"})
+                ack_every_chunks = int(hello.get("ack_every_chunks") or 1)
+                if ack_every_chunks <= 0:
+                    ack_every_chunks = 1
                 chunks = 0
                 total = 0
 
@@ -201,6 +278,7 @@ def receive_once(args):
                     if msg_type == "done":
                         send_json(conn, {
                             "status": "ok",
+                            "type": "done",
                             "chunks": chunks,
                             "bytes": total,
                         })
@@ -216,16 +294,32 @@ def receive_once(args):
                     data = read_exact(conn, length)
                     digest = hashlib.sha256(data).hexdigest()
                     if digest != msg["sha256"]:
-                        send_json(conn, {"status": "error", "error": "sha256 mismatch"})
+                        send_json(conn, {
+                            "status": "error",
+                            "error": "sha256 mismatch",
+                            "chunks": chunks,
+                            "bytes": total,
+                        })
                         return 2
 
                     written = os.pwrite(fd, data, offset)
                     if written != length:
-                        send_json(conn, {"status": "error", "error": "short write"})
+                        send_json(conn, {
+                            "status": "error",
+                            "error": "short write",
+                            "chunks": chunks,
+                            "bytes": total,
+                        })
                         return 2
                     chunks += 1
                     total += length
-                    send_json(conn, {"status": "ok"})
+                    if chunks % ack_every_chunks == 0:
+                        send_json(conn, {
+                            "status": "ok",
+                            "type": "ack",
+                            "chunks": chunks,
+                            "bytes": total,
+                        })
             finally:
                 os.fsync(fd)
                 os.close(fd)
@@ -249,6 +343,7 @@ def main(argv=None):
     full.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK)
     full.add_argument("--connect-timeout", type=float, default=10.0)
     full.add_argument("--progress-interval", type=float, default=1.0)
+    full.add_argument("--ack-every-chunks", type=int, default=DEFAULT_ACK_EVERY_CHUNKS)
     full.add_argument("--truncate", action="store_true")
 
     ranges = sub.add_parser("send-ranges")
@@ -259,6 +354,7 @@ def main(argv=None):
     ranges.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK)
     ranges.add_argument("--connect-timeout", type=float, default=10.0)
     ranges.add_argument("--progress-interval", type=float, default=1.0)
+    ranges.add_argument("--ack-every-chunks", type=int, default=DEFAULT_ACK_EVERY_CHUNKS)
     ranges.add_argument("--truncate", action="store_true")
 
     args = parser.parse_args(argv)

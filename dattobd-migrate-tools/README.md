@@ -84,6 +84,8 @@ Then start the receiver again and send only those ranges:
 
 The receiver writes each chunk at the explicit byte offset supplied by the sender. Each chunk is protected by a SHA-256 checksum over the transferred bytes.
 
+The socket transport streams chunks continuously instead of waiting for a receiver acknowledgement after every chunk. The receiver sends periodic acknowledgements every 32 chunks by default, plus a final acknowledgement after the transfer is complete. Tune this with `--ack-every-chunks` on `send-full` or `send-ranges`; larger values reduce round trips, while smaller values report receiver-side errors sooner.
+
 ## Important notes
 
 - Run only on a disposable test disk first.
