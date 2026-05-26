@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>dattobd 块迁移控制台</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=ui-polish-20260526">
 </head>
 <body>
   <main class="shell">
@@ -17,7 +17,44 @@
     </header>
 
     <section class="grid">
-      <form class="panel" id="configForm">
+      <form class="panel config-panel" id="configForm">
+        <div class="transport-band">
+          <div class="transport-head">
+            <div>
+              <span>传输模型</span>
+              <strong>Socket 压缩策略</strong>
+            </div>
+            <div class="transport-badge" id="compressionPreview">不压缩</div>
+          </div>
+
+          <div class="compression-switch" aria-label="传输压缩">
+            <label for="compressionNone">
+              <input id="compressionNone" type="radio" name="compression" value="none" checked>
+              <span>不压缩</span>
+            </label>
+            <label for="compressionAuto">
+              <input id="compressionAuto" type="radio" name="compression" value="auto">
+              <span>自动</span>
+            </label>
+            <label for="compressionZlib">
+              <input id="compressionZlib" type="radio" name="compression" value="zlib">
+              <span>zlib</span>
+            </label>
+          </div>
+
+          <div class="row transport-row">
+            <label>目标解压
+              <select name="decompression">
+                <option value="auto" selected>自动</option>
+                <option value="none">禁用</option>
+              </select>
+            </label>
+            <label>压缩级别<input name="compressionLevel" value="1" type="number" min="1" max="9"></label>
+            <label>socket 端口<input name="socketPort" value="19090" type="number"></label>
+            <label>minor<input name="minor" value="0" type="number"></label>
+          </div>
+        </div>
+
         <div class="panel-head">
           <h2>源端</h2>
           <button type="button" class="ghost" id="probeSource">探测</button>
@@ -38,26 +75,6 @@
         <label>目标分区 / 块设备<input name="target.device" value="/dev/vdb1" required></label>
         <label>私钥<textarea name="target.key" placeholder="可留空使用本机 ssh 默认密钥"></textarea></label>
 
-        <div class="row">
-          <label>socket 端口<input name="socketPort" value="19090" type="number"></label>
-          <label>minor<input name="minor" value="0" type="number"></label>
-        </div>
-        <div class="row transport-row">
-          <label>传输压缩
-            <select name="compression">
-              <option value="none" selected>不压缩</option>
-              <option value="auto">自动</option>
-              <option value="zlib">zlib</option>
-            </select>
-          </label>
-          <label>目标解压
-            <select name="decompression">
-              <option value="auto" selected>自动</option>
-              <option value="none">禁用</option>
-            </select>
-          </label>
-          <label>压缩级别<input name="compressionLevel" value="1" type="number" min="1" max="9"></label>
-        </div>
         <button class="primary" type="submit">创建并推送产物</button>
         <button class="secondary" type="button" id="adoptRemote">接管远端运行中任务</button>
       </form>
@@ -107,6 +124,6 @@
       <pre id="probeOutput">点击源端或目标端探测按钮查看远端磁盘与系统信息。</pre>
     </section>
   </main>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=ui-polish-20260526"></script>
 </body>
 </html>

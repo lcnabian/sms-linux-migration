@@ -5,6 +5,7 @@ __pycache__/
 
 # migration-ui local runtime state
 migration-ui/state/
+migration-ui/*.log
 
 # Linux/kernel build artifacts
 *.o

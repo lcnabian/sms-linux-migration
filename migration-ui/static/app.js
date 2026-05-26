@@ -62,6 +62,14 @@ function decompressionLabel(value) {
   return labels[value] || value || "-";
 }
 
+function updateCompressionPreview() {
+  const selected = document.querySelector('input[name="compression"]:checked');
+  const preview = $("compressionPreview");
+  if (!selected || !preview) return;
+  preview.textContent = compressionLabel(selected.value);
+  preview.dataset.mode = selected.value;
+}
+
 async function post(url, body = {}) {
   const res = await fetch(url, {
     method: "POST",
@@ -159,6 +167,9 @@ async function loadJobs() {
 
 $("probeSource").addEventListener("click", () => probe("source"));
 $("probeTarget").addEventListener("click", () => probe("target"));
+document.querySelectorAll('input[name="compression"]').forEach((input) => {
+  input.addEventListener("change", updateCompressionPreview);
+});
 
 $("configForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -219,4 +230,5 @@ $("refreshRemote").addEventListener("click", async () => {
 
 $("reloadJobs").addEventListener("click", loadJobs);
 
+updateCompressionPreview();
 loadJobs();
